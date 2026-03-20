@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { User, Shield, Trash2, Save, Plus, X, LogOut, Camera } from 'lucide-react'
+import { User, Shield, Trash2, Save, Plus, X, LogOut } from 'lucide-react'
 import { userApi, authApi } from '../lib/api'
 import { useAuthStore } from '../store/auth.store'
 import { useNavigate } from 'react-router-dom'

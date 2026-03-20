@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { Bell, Plus, Trash2, Clock, Zap, ChevronDown, ChevronUp } from 'lucide-react'
+import { Bell, Plus, Trash2, Clock, Zap, ChevronUp } from 'lucide-react'
 import { reminderApi } from '../lib/api'
 import { clsx } from 'clsx'
 
