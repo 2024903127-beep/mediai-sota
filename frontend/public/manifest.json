@@ -1,0 +1,19 @@
+{
+  "name": "MediAI — Smart Health Assistant",
+  "short_name": "MediAI",
+  "description": "AI-powered health assistant by Rahul Mishra",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#16a37a",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["health", "medical", "productivity"]
+}
