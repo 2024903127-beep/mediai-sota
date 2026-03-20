@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
+import jwt, { SignOptions } from 'jsonwebtoken';
 import { z } from 'zod';
 import { supabase } from '../config/supabase';
 import { sendSuccess, sendError } from '../utils/response';
@@ -23,9 +23,10 @@ const LoginSchema = z.object({
 });
 
 function signToken(id: string, email: string, role: string) {
-  return jwt.sign({ id, email, role }, process.env.JWT_SECRET!, {
-    expiresIn: process.env.JWT_EXPIRES_IN || '7d',
-  });
+  const options: SignOptions = {
+    expiresIn: (process.env.JWT_EXPIRES_IN || '7d') as any
+  };
+  return jwt.sign({ id, email, role }, process.env.JWT_SECRET!, options);
 }
 
 // POST /api/auth/register
