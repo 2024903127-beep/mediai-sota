@@ -19,6 +19,8 @@ export default function ScannerPage() {
   const [mode, setMode]       = useState<Mode>('simple')
   const [loading, setLoading] = useState(false)
   const [result, setResult]   = useState<any>(null)
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [editValue, setEditValue] = useState('')
   const [summaryOpen, setSummaryOpen] = useState(true)
   const [liveScan, setLiveScan] = useState(false)
   const cameraRef = useRef<HTMLInputElement>(null)
@@ -108,6 +110,30 @@ export default function ScannerPage() {
     } catch (err: any) {
       toast.error(err.response?.data?.error || 'Scan failed — try a clearer image.')
     } finally { setLoading(false) }
+  }
+
+  const handleFeedback = async (original: string, corrected: string, scanId?: string) => {
+    try {
+      await scanApi.submitFeedback({
+        scan_id: scanId,
+        original_text: original,
+        corrected_text: corrected,
+        metadata: { source: 'scanner_edit' }
+      })
+      toast.success('AI learned from your correction!')
+    } catch {
+      logger.error('Feedback failed silently')
+    }
+  }
+
+  const saveEdit = (index: number) => {
+    if (!result) return
+    const original = result.ocr.medicines[index].name
+    const newMeds = [...result.ocr.medicines]
+    newMeds[index].name = editValue
+    setResult({ ...result, ocr: { ...result.ocr, medicines: newMeds } })
+    setEditingId(null)
+    handleFeedback(original, editValue, result.prescription_id)
   }
 
   const clearFile = (e: React.MouseEvent) => {
@@ -267,28 +293,72 @@ export default function ScannerPage() {
             <div className="flex items-center justify-between mb-4">
               <h3 className="section-title flex items-center gap-2">
                 <Pill size={16} className="text-brand-600" />
-                Medicines detected
+                Detected Medicines
                 <span className="text-xs bg-brand-100 text-brand-700 px-2 py-0.5 rounded-full font-semibold">{result.ocr.medicines.length}</span>
               </h3>
-              {result.ocr.confidence && (
-                <span className="text-xs text-slate-400">OCR confidence: {result.ocr.confidence.toFixed(0)}%</span>
-              )}
+              <div className="flex items-center gap-3">
+                {result.ocr.confidence && (
+                  <div className="flex items-center gap-1.5 px-2 py-1 bg-slate-50 border border-slate-100 rounded-lg">
+                    <div className={clsx('w-2 h-2 rounded-full', result.ocr.confidence > 80 ? 'bg-emerald-500' : result.ocr.confidence > 60 ? 'bg-amber-500' : 'bg-red-500')} />
+                    <span className="text-[10px] font-bold text-slate-500 uppercase">OCR {result.ocr.confidence.toFixed(0)}%</span>
+                  </div>
+                )}
+              </div>
             </div>
+
             {result.ocr.medicines.length === 0 ? (
               <div className="empty-state !py-8">
-                <p className="text-slate-500 text-sm">No medicines detected. Try a clearer, well-lit image.</p>
+                <p className="text-slate-500 text-sm">No medicines detected. Try a clearer image.</p>
               </div>
             ) : (
-              <div className="divide-y divide-slate-50">
+              <div className="space-y-3">
                 {result.ocr.medicines.map((m: any, i: number) => (
-                  <div key={i} className="py-3 first:pt-0 last:pb-0 flex items-center justify-between gap-3">
-                    <div>
-                      <p className="font-semibold text-slate-900 text-sm">{m.name}</p>
-                      {m.frequency && <p className="text-xs text-slate-400 mt-0.5">{m.frequency}</p>}
+                  <div key={i} className="p-4 rounded-2xl border border-slate-100 bg-white hover:border-brand-200 transition-all group">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1">
+                        {editingId === i ? (
+                          <div className="flex items-center gap-2">
+                            <input autoFocus className="input !py-1 !px-2 !text-sm" value={editValue} onChange={e => setEditValue(e.target.value)} />
+                            <button onClick={() => saveEdit(i)} className="text-brand-600 font-bold text-xs uppercase">Save</button>
+                            <button onClick={() => setEditingId(null)} className="text-slate-400 font-bold text-xs uppercase">Cancel</button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <p className="font-bold text-slate-900 text-sm">{m.name}</p>
+                            <button onClick={() => { setEditingId(i); setEditValue(m.name) }} className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-brand-600 transition-all">
+                              <CheckCircle size={14} />
+                            </button>
+                          </div>
+                        )}
+                        <div className="flex items-center gap-2 mt-1">
+                          {m.score && (
+                            <span className={clsx(
+                              'text-[10px] font-bold px-1.5 py-0.5 rounded-md',
+                              m.score > 85 ? 'bg-emerald-50 text-emerald-600' : m.score > 70 ? 'bg-amber-50 text-amber-600' : 'bg-red-50 text-red-600'
+                            )}>
+                              {m.score}% Confidence
+                            </span>
+                          )}
+                          {m.composition && <span className="text-xs text-slate-400">· {m.composition}</span>}
+                        </div>
+                      </div>
+                      <div className="w-9 h-9 rounded-xl bg-slate-50 flex items-center justify-center text-slate-400 group-hover:bg-brand-50 group-hover:text-brand-600 transition-all">
+                        <Pill size={16} />
+                      </div>
                     </div>
-                    <div className="shrink-0 w-8 h-8 rounded-lg bg-slate-50 flex items-center justify-center">
-                      <Pill size={14} className="text-slate-400" />
-                    </div>
+
+                    {/* Suggestions Area */}
+                    {m.suggestions?.length > 0 && !editingId && (
+                      <div className="mt-3 pt-3 border-t border-slate-50 flex flex-wrap gap-2">
+                        <span className="text-[10px] text-slate-400 font-bold uppercase w-full mb-1">Did you mean?</span>
+                        {m.suggestions.map((s: any) => (
+                          <button key={s.name} onClick={() => { setEditValue(s.name); saveEdit(i) }}
+                            className="px-2 py-1 rounded-lg bg-slate-50 hover:bg-brand-50 text-[11px] text-slate-600 hover:text-brand-700 border border-slate-100 transition-all">
+                            {s.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

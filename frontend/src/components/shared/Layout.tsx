@@ -9,22 +9,22 @@ import { useAuthStore } from '../../store/auth.store'
 import { clsx } from 'clsx'
 
 const NAV = [
-  { to: '/dashboard',     icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/scanner',       icon: ScanLine,        label: 'Scan Rx' },
-  { to: '/chat',          icon: MessageSquare,   label: 'AI Chat' },
-  { to: '/prescriptions', icon: FileText,        label: 'Prescriptions' },
-  { to: '/risk',          icon: AlertTriangle,   label: 'Risk Check' },
-  { to: '/locker',        icon: FolderLock,      label: 'Health Locker' },
-  { to: '/reminders',     icon: Bell,            label: 'Reminders' },
-  { to: '/profile',       icon: User,            label: 'Profile' },
+  { to: '/app/dashboard',     icon: LayoutDashboard, label: 'Dashboard' },
+  { to: '/app/scanner',       icon: ScanLine,        label: 'Scan Rx' },
+  { to: '/app/chat',          icon: MessageSquare,   label: 'AI Chat' },
+  { to: '/app/prescriptions', icon: FileText,        label: 'Prescriptions' },
+  { to: '/app/risk',          icon: AlertTriangle,   label: 'Risk Check' },
+  { to: '/app/locker',        icon: FolderLock,      label: 'Health Locker' },
+  { to: '/app/reminders',     icon: Bell,            label: 'Reminders' },
+  { to: '/app/profile',       icon: User,            label: 'Profile' },
 ]
 
 const BOTTOM_NAV = [
-  { to: '/dashboard', icon: LayoutDashboard, label: 'Home' },
-  { to: '/scanner',   icon: ScanLine,        label: 'Scan' },
-  { to: '/chat',      icon: MessageSquare,   label: 'Chat' },
-  { to: '/risk',      icon: AlertTriangle,   label: 'Risk' },
-  { to: '/profile',   icon: User,            label: 'Profile' },
+  { to: '/app/dashboard', icon: LayoutDashboard, label: 'Home' },
+  { to: '/app/scanner',   icon: ScanLine,        label: 'Scan' },
+  { to: '/app/chat',      icon: MessageSquare,   label: 'Chat' },
+  { to: '/app/risk',      icon: AlertTriangle,   label: 'Risk' },
+  { to: '/app/profile',   icon: User,            label: 'Profile' },
 ]
 
 export default function Layout() {
@@ -42,7 +42,7 @@ export default function Layout() {
   const initials = user?.email?.slice(0, 2).toUpperCase() ?? 'ME'
   const isDoctor = user?.role === 'doctor' || user?.role === 'admin'
   const allNav = isDoctor
-    ? [...NAV, { to: '/hospital', icon: Building2, label: 'Hospital' }]
+    ? [...NAV, { to: '/app/hospital', icon: Building2, label: 'Hospital' }]
     : NAV
 
   const SidebarInner = () => (
@@ -144,7 +144,7 @@ export default function Layout() {
               </div>
               <span className="font-bold text-[14px] text-slate-900">MediAI</span>
             </div>
-            <NavLink to="/profile">
+            <NavLink to="/app/profile">
               <div className="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center">
                 <span className="text-brand-700 text-[11px] font-bold">{initials}</span>
               </div>

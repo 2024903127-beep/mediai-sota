@@ -26,7 +26,7 @@ export default function ConsentPage() {
       await authApi.consent()
       if (user) setUser({ ...user, consent_given_at: new Date().toISOString() })
       toast.success('Welcome to MediAI!')
-      navigate('/dashboard')
+      navigate('/app/dashboard')
     } catch { toast.error('Failed to record consent. Please try again.') }
     finally { setLoading(false) }
   }

@@ -40,6 +40,7 @@ export const userApi = {
 
 export const scanApi = {
   scanPrescription: (formData: FormData) => api.post('/scan/prescription', formData, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 60000 }),
+  submitFeedback: (d: any) => api.post('/ai/feedback', d),
 }
 
 export const prescriptionApi = {
@@ -52,6 +53,7 @@ export const prescriptionApi = {
 export const aiApi = {
   explain: (medicine_name: string, composition?: string, mode = 'simple') => api.post('/ai/explain', { medicine_name, composition, mode }),
   chat: (message: string, session_id?: string, mode = 'simple') => api.post('/ai/chat', { message, session_id, mode }),
+  feedback: (d: any) => api.post('/ai/feedback', d),
   sessions: () => api.get('/chat/sessions'),
   messages: (id: string) => api.get(`/chat/sessions/${id}/messages`),
   deleteSession: (id: string) => api.delete(`/chat/sessions/${id}`),

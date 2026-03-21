@@ -1,14 +1,10 @@
-/**
- * Upgraded OCR Service
- * Uses Tesseract.js with image pre-processing via sharp for much better accuracy
- * Plus Levenshtein-based fuzzy correction of common OCR mistakes
- */
-
 import Tesseract from 'tesseract.js';
 import { logger } from '../utils/logger';
 import { pipeline } from '@xenova/transformers';
 import path from 'path';
 import fs from 'fs';
+import levenshtein from 'fast-levenshtein';
+import medicinesDb from '../data/medicines_db.json';
 
 export interface OCRResult {
   raw_text: string;
@@ -16,6 +12,12 @@ export interface OCRResult {
   doctor_name?: string;
   date?: string;
   confidence: number;
+  review_required?: string[];
+  engine_breakdown?: {
+    tesseract_confidence: number;
+    trocr_used: boolean;
+    consensus_score: number;
+  };
 }
 
 export interface ExtractedMedicine {
@@ -23,14 +25,33 @@ export interface ExtractedMedicine {
   frequency?: string;
   composition?: string;
   raw_line: string;
+  confidence?: number;
+  requires_review?: boolean;
+  candidates?: string[];
 }
 
-// Common medicine frequency patterns
+interface EngineOutput {
+  text: string;
+  lines: string[];
+  confidence: number;
+}
+
+interface MedicineLookupResult {
+  name: string;
+  score: number;
+  suggestions: string[];
+}
+
+interface MedicineIndexEntry {
+  name: string;
+  normalized: string;
+}
+
 const FREQUENCY_PATTERNS = [
   /\b(\d+\s*times?\s*(?:a\s*)?day)\b/i,
   /\b(once|twice|thrice|three times)\s*(?:a\s*)?(?:day|daily)\b/i,
-  /\b(OD|BD|TDS|QID|SOS|PRN|HS|AC|PC)\b/g,
-  /\b(\d+[-–]\d+[-–]\d+)\b/g,
+  /\b(OD|BD|TDS|QID|SOS|PRN|HS|AC|PC)\b/i,
+  /\b(\d+\s*[-\/]\s*\d+\s*[-\/]\s*\d+)\b/i,
 ];
 
 const MEDICINE_INDICATORS = [
@@ -38,24 +59,68 @@ const MEDICINE_INDICATORS = [
   /\b(mg|mcg|ml|g|iu)\b/i,
 ];
 
-// Common OCR character substitution errors in medicine names
+const NON_MEDICINE_LINE_PATTERN =
+  /^(dr\.|doctor|patient|date|rx|address|phone|name:|clinic|hospital|sig:|rp:|dispensed|diagnosis|advice)\b/i;
+
 const OCR_CORRECTIONS: [RegExp, string][] = [
-  [/0(?=[a-z])/gi, 'o'],   // 0 mistaken for o
-  [/1(?=[a-z])/gi, 'l'],   // 1 mistaken for l
-  [/\bI(?=[a-z])/g, 'l'],  // I mistaken for l  
-  [/\|/g, 'l'],             // | mistaken for l
-  [/\brn\b/g, 'm'],         // rn -> m (common OCR error)
+  [/0(?=[a-z])/gi, 'o'],
+  [/1(?=[a-z])/gi, 'l'],
+  [/\bI(?=[a-z])/g, 'l'],
+  [/\|/g, 'l'],
+  [/\brn\b/g, 'm'],
 ];
 
-function applyOcrCorrections(text: string): string {
-  let result = text;
-  for (const [pattern, replacement] of OCR_CORRECTIONS) {
-    result = result.replace(pattern, replacement);
-  }
-  return result;
+const NOISE_WORDS = [
+  'MFG',
+  'EXP',
+  'BATCH',
+  'LOT',
+  'LTD',
+  'PHARMA',
+  'TABLETS',
+  'CAPSULES',
+  'PVT',
+  'LIMITED',
+  'INC',
+  'CO',
+  'ADDRESS',
+  'PHONE',
+  'DATE',
+  'PRICE',
+  'MRP',
+  'INCL',
+  'TAXES',
+  'FOR',
+  'USE',
+  'STORE',
+  'COOL',
+  'PLACE',
+  'KEEP',
+  'OUT',
+  'REACH',
+  'CHILDREN',
+  'DRY',
+  'PROTECT',
+  'LIGHT',
+  'STRIP',
+  'PACK',
+];
+
+const medicineList = (((medicinesDb as { medicines?: Array<{ name?: string }> }).medicines) || [])
+  .map((m) => m.name?.trim())
+  .filter((name): name is string => Boolean(name));
+
+const medicineIndex = new Map<string, string>();
+const medicineEntries: MedicineIndexEntry[] = [];
+for (const medicine of medicineList) {
+  const normalized = normalizeCompact(medicine);
+  if (!normalized) continue;
+  if (!medicineIndex.has(normalized)) medicineIndex.set(normalized, medicine);
+  medicineEntries.push({ name: medicine, normalized });
 }
 
-// ─── TrOCR Configuration ──────────────────────────────────────────────────────
+const tokenLookupCache = new Map<string, number>();
+
 let trocrPipeline: any = null;
 
 async function getTrOCR() {
@@ -66,110 +131,281 @@ async function getTrOCR() {
   return trocrPipeline;
 }
 
-// Preprocesses image buffer using sharp for better OCR accuracy
+function normalizeCompact(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function applyOcrCorrections(text: string): string {
+  let result = text;
+  for (const [pattern, replacement] of OCR_CORRECTIONS) {
+    result = result.replace(pattern, replacement);
+  }
+  return result;
+}
+
+function looksLikeNoiseToken(token: string): boolean {
+  const clean = token.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!clean) return true;
+  if (NOISE_WORDS.includes(clean)) return true;
+  if (/^[0-9]{4,}$/.test(clean)) return true;
+  if (/^[A-Z0-9]{8,}$/.test(clean)) return true;
+  return false;
+}
+
+function fuzzyLookupMedicine(input: string): MedicineLookupResult | null {
+  const normalized = normalizeCompact(input);
+  if (!normalized || normalized.length < 3) return null;
+
+  const exact = medicineIndex.get(normalized);
+  if (exact) return { name: exact, score: 100, suggestions: [] };
+
+  const ranked: Array<{ name: string; score: number }> = [];
+  for (const entry of medicineEntries) {
+    const maxLen = Math.max(normalized.length, entry.normalized.length);
+    if (!maxLen) continue;
+    if (Math.abs(entry.normalized.length - normalized.length) > 10) continue;
+
+    const distance = levenshtein.get(normalized, entry.normalized);
+    const score = Math.round((1 - distance / maxLen) * 100);
+    if (score >= 62) ranked.push({ name: entry.name, score });
+  }
+
+  ranked.sort((a, b) => b.score - a.score);
+  if (!ranked.length) return null;
+
+  return {
+    name: ranked[0].name,
+    score: ranked[0].score,
+    suggestions: ranked.slice(1, 4).map((r) => r.name),
+  };
+}
+
+function getTokenMedicineBoost(token: string): number {
+  const key = normalizeCompact(token);
+  if (!key || key.length < 4) return 0;
+  const cached = tokenLookupCache.get(key);
+  if (cached !== undefined) return cached;
+
+  const lookup = fuzzyLookupMedicine(token);
+  const boost = !lookup ? 0 : lookup.score >= 90 ? 0.35 : lookup.score >= 80 ? 0.2 : 0.1;
+  tokenLookupCache.set(key, boost);
+  return boost;
+}
+
+function scoreToken(token: string, baseWeight: number): number {
+  let score = baseWeight;
+  if (!token) return 0;
+  if (looksLikeNoiseToken(token)) score -= 0.45;
+  if (/[a-z]/i.test(token)) score += 0.08;
+  if (/^\d+(\.\d+)?(mg|mcg|ml|g|iu)$/i.test(token)) score += 0.08;
+  score += getTokenMedicineBoost(token);
+  return score;
+}
+
+function tokenize(line: string): string[] {
+  return line
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
+function mergeLineTokens(lineA: string, lineB: string, weightA: number, weightB: number): { line: string; agreement: number } {
+  if (!lineA.trim() && !lineB.trim()) return { line: '', agreement: 1 };
+  if (!lineA.trim()) return { line: lineB, agreement: 0 };
+  if (!lineB.trim()) return { line: lineA, agreement: 0 };
+
+  const tokensA = tokenize(lineA);
+  const tokensB = tokenize(lineB);
+  const maxLength = Math.max(tokensA.length, tokensB.length);
+  const merged: string[] = [];
+
+  let agreed = 0;
+  let compared = 0;
+
+  for (let idx = 0; idx < maxLength; idx++) {
+    const tokenA = tokensA[idx] || '';
+    const tokenB = tokensB[idx] || '';
+    if (!tokenA && !tokenB) continue;
+
+    if (!tokenA || !tokenB) {
+      merged.push(tokenA || tokenB);
+      continue;
+    }
+
+    compared += 1;
+    if (normalizeCompact(tokenA) === normalizeCompact(tokenB)) {
+      agreed += 1;
+      merged.push(tokenA.length >= tokenB.length ? tokenA : tokenB);
+      continue;
+    }
+
+    const scoreA = scoreToken(tokenA, weightA);
+    const scoreB = scoreToken(tokenB, weightB);
+    merged.push(scoreA >= scoreB ? tokenA : tokenB);
+  }
+
+  return {
+    line: merged.join(' ').trim(),
+    agreement: compared ? agreed / compared : 1,
+  };
+}
+
+function cleanOcrText(text: string): string {
+  return applyOcrCorrections(text)
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .map((line) => {
+      const filteredTokens = tokenize(line).filter((token) => !looksLikeNoiseToken(token) && token.length > 1);
+      return filteredTokens.join(' ').trim();
+    })
+    .filter((line) => /[a-z]/i.test(line))
+    .filter((line) => line.length >= 3)
+    .join('\n');
+}
+
+function splitLines(text: string): string[] {
+  const cleaned = cleanOcrText(text);
+  if (!cleaned) return [];
+  return cleaned
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function fuseEngineOutputs(tesseract: EngineOutput, trocr: EngineOutput): { text: string; consensusScore: number } {
+  if (!trocr.text.trim()) {
+    return {
+      text: cleanOcrText(tesseract.text),
+      consensusScore: 1,
+    };
+  }
+
+  const tWeight = Math.min(0.95, Math.max(0.45, tesseract.confidence / 100));
+  const trWeight = tesseract.confidence < 60 ? 0.78 : 0.68;
+  const maxLines = Math.max(tesseract.lines.length, trocr.lines.length);
+  const mergedLines: string[] = [];
+
+  let agreementAccumulator = 0;
+  let agreementCount = 0;
+
+  for (let idx = 0; idx < maxLines; idx++) {
+    const lineA = tesseract.lines[idx] || '';
+    const lineB = trocr.lines[idx] || '';
+    const merged = mergeLineTokens(lineA, lineB, tWeight, trWeight);
+    if (merged.line) mergedLines.push(merged.line);
+    agreementAccumulator += merged.agreement;
+    agreementCount += 1;
+  }
+
+  const consensusScore = agreementCount ? agreementAccumulator / agreementCount : 0;
+  const mergedText = cleanOcrText(mergedLines.join('\n'));
+  return { text: mergedText, consensusScore };
+}
+
 async function preprocessImage(imageBuffer: Buffer): Promise<Buffer> {
   try {
-    const sharp = await import('sharp').then(m => m.default || m);
+    const sharp = await import('sharp').then((m) => m.default || m);
     return await sharp(imageBuffer)
-      .grayscale()            // Convert to black & white
-      .normalize()            // Maximize contrast
-      .sharpen({ sigma: 1.5 }) // Sharpen edges
-      .modulate({ brightness: 1.1 }) // Slight brightness boost
-      .png()                  // Output as PNG (Tesseract works best with PNG)
+      .grayscale()
+      .normalize()
+      .sharpen({ sigma: 1.5 })
+      .modulate({ brightness: 1.1 })
+      .png()
       .toBuffer();
   } catch (sharpErr) {
     logger.warn('sharp preprocessing unavailable, using raw image:', sharpErr);
-    return imageBuffer; // Fall back to original if sharp not working
+    return imageBuffer;
   }
 }
 
-export async function extractTextFromImage(imageBuffer: Buffer): Promise<OCRResult> {
+async function runTesseract(imageBuffer: Buffer): Promise<EngineOutput> {
+  const tessResult = await Tesseract.recognize(imageBuffer, 'eng', { logger: () => {} });
+  const text = tessResult.data.text || '';
+  const confidence = Number(tessResult.data.confidence || 0);
+  return {
+    text,
+    lines: splitLines(text),
+    confidence,
+  };
+}
+
+async function runTrOCR(imageBuffer: Buffer): Promise<EngineOutput> {
+  let tmpPath = '';
   try {
-    logger.info('Preprocessing image for OCR...');
-    const processedBuffer = await preprocessImage(imageBuffer);
-
-    logger.info('Starting OCR Ensemble (Tesseract + TrOCR)...');
-    
-    // Run Ensemble in parallel
-    const [tessResult, trocrText] = await Promise.all([
-      // A: Tesseract.js (Fast, multi-line)
-      Tesseract.recognize(processedBuffer, 'eng', { logger: () => {} }),
-      
-      // B: TrOCR (Transformer-based, high accuracy for printed text)
-      (async () => {
-        try {
-          const model = await getTrOCR();
-          const tmpPath = path.join(__dirname, `../../tmp_ocr_${Date.now()}.png`);
-          fs.writeFileSync(tmpPath, processedBuffer);
-          const out = await model(tmpPath);
-          if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
-          return out?.[0]?.generated_text || '';
-        } catch (e) {
-          logger.warn('TrOCR failed, continuing with Tesseract only', e);
-          return '';
-        }
-      })()
-    ]);
-
-    let raw_text = applyOcrCorrections(tessResult.data.text);
-    const confidence = tessResult.data.confidence;
-
-    // Intelligence: If TrOCR found text that Tesseract missed or if confidence is low, 
-    // we append it or use it to verify drug names.
-    if (trocrText && trocrText.length > 5) {
-      if (confidence < 70) {
-        logger.info('Low Tesseract confidence, prioritizing TrOCR results');
-        raw_text = applyOcrCorrections(trocrText) + '\n' + raw_text;
-      } else {
-        raw_text += '\n--- Ensemble Verification ---\n' + applyOcrCorrections(trocrText);
-      }
-    }
-
-    const medicines = parseMedicinesFromText(raw_text);
-    const doctor_name = extractDoctorName(raw_text);
-    const date = extractDate(raw_text);
-
-    logger.info(`OCR done — Confidence: ${confidence.toFixed(0)}%, Medicines found: ${medicines.length}`);
-    return { raw_text, medicines, doctor_name, date, confidence };
+    const model = await getTrOCR();
+    tmpPath = path.join(__dirname, `../../tmp_ocr_${Date.now()}_${Math.random().toString(16).slice(2)}.png`);
+    fs.writeFileSync(tmpPath, imageBuffer);
+    const output = await model(tmpPath);
+    const text = output?.[0]?.generated_text || '';
+    return {
+      text,
+      lines: splitLines(text),
+      confidence: 70,
+    };
   } catch (error) {
-    logger.error('OCR extraction failed', error);
-    throw new Error('Failed to extract text from image');
+    logger.warn('TrOCR failed, continuing with Tesseract only', error);
+    return {
+      text: '',
+      lines: [],
+      confidence: 0,
+    };
+  } finally {
+    if (tmpPath && fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
   }
+}
+
+function extractMedicineCandidate(line: string): string {
+  const nameMatch = line.match(
+    /^([A-Za-z][A-Za-z0-9\s\-\+]{1,60}?)(?=\s+\d|\s+(tab|tablet|cap|capsule|syrup|mg|mcg|ml|g|iu|od|bd|tds|qid|sos|prn)\b|$)/i
+  );
+  if (nameMatch?.[1]) return nameMatch[1].trim();
+  return line
+    .split(/\s+/)
+    .slice(0, 3)
+    .join(' ')
+    .trim();
 }
 
 function parseMedicinesFromText(text: string): ExtractedMedicine[] {
-  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
-  const medicines: ExtractedMedicine[] = [];
+  const lines = text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const medicinesByName = new Map<string, ExtractedMedicine>();
 
   for (const line of lines) {
-    const isMedicineLine = MEDICINE_INDICATORS.some((p) => p.test(line));
-    if (!isMedicineLine && line.length < 5) continue;
+    if (NON_MEDICINE_LINE_PATTERN.test(line)) continue;
 
-    // Skip obvious non-medicine lines
-    if (/^(dr\.|doctor|patient|date|rx|address|phone|name:|clinic|hospital|sig:|rp:|dispensed)/i.test(line)) continue;
+    const hasIndicator = MEDICINE_INDICATORS.some((pattern) => pattern.test(line));
+    const rawCandidate = extractMedicineCandidate(line);
+    if (!rawCandidate || rawCandidate.length < 3) continue;
 
-    const medicine: ExtractedMedicine = { name: '', raw_line: line };
+    const lookup = fuzzyLookupMedicine(rawCandidate);
+    if (!hasIndicator && (!lookup || lookup.score < 74)) continue;
 
-    // Extract frequency
-    for (const pattern of FREQUENCY_PATTERNS) {
-      const match = line.match(pattern);
-      if (match) { medicine.frequency = match[0]; break; }
-    }
+    const frequency = FREQUENCY_PATTERNS.map((pattern) => line.match(pattern)?.[0]).find(Boolean);
+    const resolvedName = lookup && lookup.score >= 80 ? lookup.name : rawCandidate;
+    const confidence = lookup ? Math.max(55, lookup.score) : hasIndicator ? 60 : 50;
+    const requiresReview = confidence < 78;
+    const key = normalizeCompact(resolvedName);
 
-    // Extract medicine name: first meaningful token before dosage/frequency info
-    const nameMatch = line.match(/^([A-Za-z][A-Za-z\s\-\+]+?)(?:\s+\d|\s+tab|\s+cap|\s+mg|\s+ml|$)/i);
-    if (nameMatch) {
-      medicine.name = nameMatch[1].trim();
-    } else {
-      medicine.name = line.split(/\s+/).slice(0, 3).join(' ');
-    }
+    const medicine: ExtractedMedicine = {
+      name: resolvedName,
+      raw_line: line,
+      frequency,
+      confidence,
+      requires_review: requiresReview,
+      candidates: lookup?.suggestions?.length ? lookup.suggestions : undefined,
+    };
 
-    if (medicine.name.length > 2 && medicine.name.length < 60) {
-      medicines.push(medicine);
+    const existing = medicinesByName.get(key);
+    if (!existing || (existing.confidence || 0) < confidence) {
+      medicinesByName.set(key, medicine);
     }
   }
 
-  return medicines;
+  return Array.from(medicinesByName.values()).sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
 }
 
 function extractDoctorName(text: string): string | undefined {
@@ -178,8 +414,40 @@ function extractDoctorName(text: string): string | undefined {
 }
 
 function extractDate(text: string): string | undefined {
-  const match = text.match(
-    /\b(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\d{4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,2})\b/
-  );
+  const match = text.match(/\b(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\d{4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,2})\b/);
   return match?.[0];
+}
+
+export async function extractTextFromImage(imageBuffer: Buffer): Promise<OCRResult> {
+  try {
+    logger.info('Preprocessing image for OCR...');
+    const processedBuffer = await preprocessImage(imageBuffer);
+
+    logger.info('Starting OCR ensemble (Tesseract + TrOCR)...');
+    const [tesseractOutput, trocrOutput] = await Promise.all([runTesseract(processedBuffer), runTrOCR(processedBuffer)]);
+
+    const fusion = fuseEngineOutputs(tesseractOutput, trocrOutput);
+    const raw_text = fusion.text;
+    const medicines = parseMedicinesFromText(raw_text);
+    const doctor_name = extractDoctorName(raw_text);
+    const date = extractDate(raw_text);
+    const review_required = medicines.filter((med) => med.requires_review).map((med) => med.name);
+
+    return {
+      raw_text,
+      medicines,
+      doctor_name,
+      date,
+      confidence: tesseractOutput.confidence,
+      review_required,
+      engine_breakdown: {
+        tesseract_confidence: tesseractOutput.confidence,
+        trocr_used: Boolean(trocrOutput.text.trim()),
+        consensus_score: Number(fusion.consensusScore.toFixed(2)),
+      },
+    };
+  } catch (error) {
+    logger.error('OCR extraction failed', error);
+    throw new Error('Failed to extract text from image');
+  }
 }

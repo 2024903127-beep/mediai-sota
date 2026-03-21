@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { Toaster } from 'react-hot-toast'
 import { useAuthStore } from './store/auth.store'
 import Layout from './components/shared/Layout'
+import LandingPage from './pages/LandingPage'
 import LoginPage from './pages/LoginPage'
 import RegisterPage from './pages/RegisterPage'
 import ConsentPage from './pages/ConsentPage'
@@ -24,7 +25,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 
 function RequireDoctor({ children }: { children: React.ReactNode }) {
   const { user } = useAuthStore()
-  if (user?.role !== 'doctor' && user?.role !== 'admin') return <Navigate to="/dashboard" replace />
+  if (user?.role !== 'doctor' && user?.role !== 'admin') return <Navigate to="/app/dashboard" replace />
   return <>{children}</>
 }
 
@@ -52,11 +53,12 @@ export default function App() {
         }}
       />
       <Routes>
+        <Route path="/" element={<LandingPage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
         <Route path="/consent" element={<ConsentPage />} />
-        <Route path="/" element={<RequireAuth><Layout /></RequireAuth>}>
-          <Route index element={<Navigate to="/dashboard" replace />} />
+        <Route path="/app" element={<RequireAuth><Layout /></RequireAuth>}>
+          <Route index element={<Navigate to="/app/dashboard" replace />} />
           <Route path="dashboard" element={<DashboardPage />} />
           <Route path="scanner" element={<ScannerPage />} />
           <Route path="chat" element={<ChatPage />} />
@@ -67,7 +69,7 @@ export default function App() {
           <Route path="profile" element={<ProfilePage />} />
           <Route path="hospital" element={<RequireDoctor><HospitalPage /></RequireDoctor>} />
         </Route>
-        <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        <Route path="*" element={<Navigate to="/app/dashboard" replace />} />
       </Routes>
     </BrowserRouter>
   )

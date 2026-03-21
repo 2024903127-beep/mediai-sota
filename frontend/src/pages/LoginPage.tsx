@@ -19,7 +19,7 @@ export default function LoginPage() {
       const { data } = await authApi.login(form)
       setAuth(data.data.user, data.data.token)
       toast.success('Welcome back!')
-      navigate(data.data.user.consent_given_at ? '/dashboard' : '/consent')
+      navigate(data.data.user.consent_given_at ? '/app/dashboard' : '/consent')
     } catch (err: any) {
       toast.error(err.response?.data?.error || 'Invalid credentials')
     } finally { setLoading(false) }

@@ -7,6 +7,7 @@ import { sendSuccess, sendError } from '../utils/response';
 import { decrypt } from '../utils/encryption';
 import { v4 as uuidv4 } from 'uuid';
 import { recordFeedback } from '../services/training.service';
+import { logger } from '../utils/logger';
 
 const router = Router();
 
@@ -40,11 +41,27 @@ router.post('/nutrition/search', async (req: AuthRequest, res: Response) => {
   sendSuccess(res, results);
 });
 
-// POST /api/ai/feedback (HITL Feedback)
-router.post('/feedback', async (req: Request, res: Response) => {
-  const { raw_ocr, human_correction, confidence_score } = req.body;
-  await recordFeedback(raw_ocr, human_correction, confidence_score);
-  sendSuccess(res, null, 'Feedback recorded for model training');
+// POST /api/ai/feedback (HITL Feedback Loop)
+router.post('/feedback', async (req: AuthRequest, res: Response) => {
+  const { scan_id, original_text, corrected_text, metadata } = req.body;
+  if (!original_text || !corrected_text) return sendError(res, 'original_text and corrected_text are required');
+
+  const userId = req.user?.id;
+
+  const { error } = await supabase.from('ai_feedback').insert({
+    user_id: userId,
+    scan_id: scan_id || null,
+    original_text,
+    corrected_text,
+    metadata: metadata || {},
+  });
+
+  if (error) {
+    logger.error('Failed to save AI feedback:', error);
+    return sendError(res, 'Failed to save feedback', 500);
+  }
+
+  sendSuccess(res, null, 'Feedback recorded for professional model training');
 });
 
 // POST /api/ai/chat

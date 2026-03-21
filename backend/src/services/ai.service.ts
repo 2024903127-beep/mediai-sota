@@ -42,13 +42,18 @@ try {
  * 5. N-gram similarity (handles missing/swapped characters)
  * 6. Levenshtein distance (baseline fuzzy)
  */
-function fastSearch(query: string): { med: any; suggestions?: string[] } | null {
+export interface SearchResult {
+  med: any | null;
+  score: number;
+  suggestions?: Array<{ name: string; score: number }>;
+}
+
+function fastSearch(query: string): SearchResult | null {
   const q = query.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
   if (!q || q.length < 3) return null;
 
   const qSoundex = getSoundex(q);
-  let best: { med: any; score: number } | null = null;
-  const suggestions: Array<{ med: any; score: number }> = [];
+  const candidates: Array<{ med: any; score: number }> = [];
 
   for (const med of medicinesDb) {
     const name = (med.name || '').toLowerCase().replace(/[^a-z0-9\s]/g, '');
@@ -57,15 +62,13 @@ function fastSearch(query: string): { med: any; suggestions?: string[] } | null 
     let score = 0;
     if (name === q) score = 100;
     else if (name.startsWith(q) || q.startsWith(name)) score = 90;
-    else if (name.includes(q)) score = 75;
-    else if (comp.includes(q)) score = 65;
+    else if (name.includes(q)) score = 80;
+    else if (comp.includes(q)) score = 70;
     
-    // Phonetic Match (SOTA Tier)
-    if (score < 60 && qSoundex === getSoundex(name)) {
-      score = 85;
-    }
+    // Phonetic Match
+    if (score < 60 && qSoundex === getSoundex(name)) score = 85;
 
-    // N-gram Similarity (Production Grade)
+    // N-gram Similarity
     const nGramScore = calculateNGramSimilarity(q, name);
     if (nGramScore > 0.6) score = Math.max(score, nGramScore * 100);
 
@@ -76,24 +79,29 @@ function fastSearch(query: string): { med: any; suggestions?: string[] } | null 
       if (dist <= tolerance) score = Math.max(score, 80 - dist * 10);
     }
 
-    if (score > 40) {
-      suggestions.push({ med, score });
-    }
-
-    if (score > 0 && (!best || score > best.score)) {
-      best = { med, score };
+    if (score > 30) {
+      candidates.push({ med, score });
     }
   }
 
-  if (best && best.score >= 70) {
-    return { med: best.med };
-  } else if (suggestions.length > 0) {
-    // Return the best match as a suggestion if below threshold
-    const sorted = suggestions.sort((a, b) => b.score - a.score).slice(0, 3);
-    return { med: null, suggestions: sorted.map(s => s.med.name) };
-  }
+  if (!candidates.length) return null;
 
-  return null;
+  const sorted = candidates.sort((a, b) => b.score - a.score);
+  const best = sorted[0];
+
+  if (best.score >= 75) {
+    return { 
+      med: best.med, 
+      score: best.score,
+      suggestions: sorted.slice(1, 4).map(s => ({ name: s.med.name, score: s.score }))
+    };
+  }
+  
+  return {
+    med: null,
+    score: best.score,
+    suggestions: sorted.slice(0, 3).map(s => ({ name: s.med.name, score: s.score }))
+  };
 }
 
 function calculateNGramSimilarity(s1: string, s2: string, n = 3): number {
@@ -246,7 +254,7 @@ export async function explainMedicine(
   if (!match) {
     let msg = `We could not find detailed offline information for **"${medicineName}"**.\n\n`;
     if (result?.suggestions?.length) {
-      msg += `**Did you mean?**\n${result.suggestions.map(s => `- ${s}`).join('\n')}\n\n`;
+      msg += `**Did you mean?**\n${result.suggestions.map(s => `- ${s.name}`).join('\n')}\n\n`;
     }
     return msg + `This might be a very new, regional, or brand-specific drug. Please consult your pharmacist or doctor for details.\n\n` + DISCLAIMER;
   }
@@ -278,7 +286,7 @@ export async function aiChat(
 
   if (searchResult?.suggestions?.length) {
     return {
-      reply: `I couldn't find an exact match for **"${userMessage}"**, but did you mean one of these?\n\n${searchResult.suggestions.map(s => `- **${s}**`).join('\n')}\n\n${DISCLAIMER}`,
+      reply: `I couldn't find an exact match for **"${userMessage}"**, but did you mean one of these?\n\n${searchResult.suggestions.map(s => `- **${s.name}**`).join('\n')}\n\n${DISCLAIMER}`,
       isEmergency: false
     };
   }
@@ -323,63 +331,141 @@ export async function aiChat(
 // ─── Summarise prescription ────────────────────────────────────────────────────
 export async function summarisePrescription(
   ocrText: string,
-  mode: ExplanationMode = 'simple'
-): Promise<string> {
+  mode: ExplanationMode = 'simple',
+  seedCandidates: string[] = []
+): Promise<{ 
+  summary: string; 
+  medicines: Array<{ 
+    name: string; 
+    score: number; 
+    composition?: string; 
+    suggestions?: Array<{ name: string; score: number }> 
+  }>;
+  review_required?: string[];
+}> {
   if (!ocrText || ocrText.trim().length < 5) {
-    return 'The scan was unable to extract readable text. Please try again with a clearer, well-lit image.\n\n' + DISCLAIMER;
+    return {
+      summary: 'The scan was unable to extract readable text. Please try again with a clearer, well-lit image.\n\n' + DISCLAIMER,
+      medicines: [],
+      review_required: ['OCR text unreadable'],
+    };
   }
 
-  const words = ocrText.split(/\s+/);
-  const found: any[] = [];
-  const suggestions: Set<string> = new Set();
+  const words = ocrText
+    .split(/\s+/)
+    .map((w) => cleanOcrMedicineName(w))
+    .filter((w) => w.length >= 3);
 
-  // Try to match every word/bigram in OCR output against the database
+  const candidates = new Set<string>();
+  const foundMeds: Map<string, any> = new Map();
+  const allSuggestions: Map<string, number> = new Map();
+  const reviewRequired = new Set<string>();
+
   for (let i = 0; i < words.length; i++) {
-    const word = cleanOcrMedicineName(words[i]);
-    const bigram = i < words.length - 1 ? cleanOcrMedicineName(`${words[i]} ${words[i+1]}`) : '';
-    
-    const result = (bigram && fastSearch(bigram)) || fastSearch(word);
-    
-    if (result?.med) {
-      if (!found.find(f => f.name === result.med.name)) found.push(result.med);
-    } else if (result?.suggestions) {
-      result.suggestions.forEach(s => suggestions.add(s));
+    const word = words[i];
+    if (word) candidates.add(word);
+
+    if (i < words.length - 1) {
+      const bigram = cleanOcrMedicineName(`${words[i]} ${words[i + 1]}`);
+      if (bigram.length >= 4) candidates.add(bigram);
+    }
+
+    if (i < words.length - 2) {
+      const trigram = cleanOcrMedicineName(`${words[i]} ${words[i + 1]} ${words[i + 2]}`);
+      if (trigram.length >= 6) candidates.add(trigram);
     }
   }
 
-  let summary = '### 📋 Prescription Analysis\n\n';
-  
-  if (found.length) {
+  for (const seed of seedCandidates) {
+    const cleanSeed = cleanOcrMedicineName(seed);
+    if (cleanSeed.length >= 3) candidates.add(cleanSeed);
+  }
+
+  const ingestResult = (result: SearchResult | null) => {
+    if (!result) return;
+
+    if (result.med) {
+      const existing = foundMeds.get(result.med.name);
+      if (!existing || existing.score < result.score) {
+        foundMeds.set(result.med.name, { ...result.med, score: result.score, suggestions: result.suggestions });
+      }
+      if (result.score < 85) reviewRequired.add(result.med.name);
+      return;
+    }
+
+    if (!result.suggestions) return;
+
+    result.suggestions.forEach((s) => {
+      const current = allSuggestions.get(s.name) || 0;
+      if (s.score > current) allSuggestions.set(s.name, s.score);
+      if (s.score >= 70) reviewRequired.add(s.name);
+    });
+  };
+
+  for (const candidate of candidates) {
+    ingestResult(fastSearch(candidate));
+  }
+
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i];
+    const nextWord = i < words.length - 1 ? words[i + 1] : '';
+    const bigram = nextWord ? cleanOcrMedicineName(`${word} ${nextWord}`) : '';
+    const result = (bigram && fastSearch(bigram)) || fastSearch(word);
+    ingestResult(result);
+  }
+
+  const medicines = Array.from(foundMeds.values());
+  let summary = '### Prescription Analysis\n\n';
+
+  if (medicines.length) {
     summary += '**Medicines Identified:**\n';
-    for (const med of found) {
-      summary += `\n#### 💊 ${med.name} *(${med.composition})*\n`;
+    for (const med of medicines) {
+      summary += `\n#### ${med.name} *(${med.composition})* - **${med.score}% Match**\n`;
       summary += `- **Used for:** ${med.uses?.slice(0, 150) || 'N/A'}\n`;
       summary += `- **Side effects:** ${med.side_effects?.slice(0, 100) || 'N/A'}\n`;
       if (mode === 'technical' && med.warnings) {
         summary += `- **Warning:** ${med.warnings?.slice(0, 100)}\n`;
       }
+      if (med.score < 85) {
+        summary += '- **Review:** Medium confidence extraction. Verify this medicine manually.\n';
+      }
     }
   }
 
-  if (suggestions.size > 0) {
-    // Only show suggestions if they aren't already identified in "found"
-    const finalSuggestions = Array.from(suggestions).filter(s => !found.find(f => f.name === s));
-    if (finalSuggestions.length > 0) {
-      summary += `\n---\n**🔍 Did you mean? (Uncertain Matches)**\n`;
-      summary += finalSuggestions.map(s => `- ${s}`).join('\n') + '\n';
-    }
+  const finalSuggestions = Array.from(allSuggestions.entries())
+    .filter(([name]) => !foundMeds.has(name))
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
+
+  if (finalSuggestions.length > 0) {
+    summary += '\n---\n**Did you mean? (Uncertain Matches)**\n';
+    summary += finalSuggestions.map(([name, score]) => `- ${name} (${score}% confidence)`).join('\n') + '\n';
   }
 
-  if (!found.length && suggestions.size === 0) {
-    summary += `No medicines from our database were definitively identified in this scan.\n\n`;
+  medicines.filter((med) => med.score < 85).forEach((med) => reviewRequired.add(med.name));
+
+  if (reviewRequired.size > 0) {
+    summary += '\n---\n**Manual review recommended for:**\n';
+    summary += Array.from(reviewRequired).slice(0, 6).map((name) => `- ${name}`).join('\n') + '\n';
+  }
+
+  if (!medicines.length && !finalSuggestions.length) {
+    summary += 'No medicines from our database were definitively identified in this scan.\n\n';
     summary += `**Raw Text Extracted:**\n\`\`\`\n${ocrText.substring(0, 300)}\n\`\`\`\n`;
-    summary += `\n_Try a higher resolution, well-lit photo for better results._\n`;
+    summary += '\n_Try a higher resolution, well-lit photo for better results._\n';
   }
 
-  return summary + '\n' + DISCLAIMER;
+  return {
+    summary: summary + '\n' + DISCLAIMER,
+    medicines: medicines.map((m) => ({
+      name: m.name,
+      score: m.score,
+      composition: m.composition,
+      suggestions: m.suggestions,
+    })),
+    review_required: Array.from(reviewRequired),
+  };
 }
-
-// ─── Generate reminder schedule ────────────────────────────────────────────────
 export async function generateReminderSchedule(
   medicines: Array<{ name: string; frequency?: string }>
 ): Promise<Array<{ medicine: string; times: string[]; note: string }>> {
@@ -392,3 +478,4 @@ export async function generateReminderSchedule(
     return { medicine: m.name, times, note: 'As prescribed' };
   });
 }
+

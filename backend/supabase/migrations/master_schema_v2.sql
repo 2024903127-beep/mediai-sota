@@ -49,13 +49,14 @@ CREATE TABLE IF NOT EXISTS ai_training_data (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS ai_training_feedback (
+-- 4. AI FEEDBACK & LEARNING LOOP
+CREATE TABLE IF NOT EXISTS ai_feedback (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  raw_ocr TEXT,
-  human_correction TEXT,
-  model_version TEXT DEFAULT 'v2-ensemble',
-  confidence_score FLOAT,
-  metadata JSONB DEFAULT '{}',
+  user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  scan_id UUID, -- Optional link to prescriptions.id
+  original_text TEXT NOT NULL,
+  corrected_text TEXT NOT NULL,
+  metadata JSONB DEFAULT '{}', -- Store OCR confidence, model version, etc.
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 

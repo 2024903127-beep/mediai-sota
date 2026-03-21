@@ -36,7 +36,7 @@ export default function PrescriptionsPage() {
           <h1 className="page-header flex items-center gap-2.5"><FileText size={22} />Prescriptions</h1>
           <p className="page-sub">All your scanned and uploaded prescriptions.</p>
         </div>
-        <Link to="/scanner" className="btn-primary shrink-0 shadow-brand-sm"><Plus size={15} />Scan new</Link>
+        <Link to="/app/scanner" className="btn-primary shrink-0 shadow-brand-sm"><Plus size={15} />Scan new</Link>
       </div>
 
       {isLoading && (
@@ -52,7 +52,7 @@ export default function PrescriptionsPage() {
           </div>
           <p className="font-semibold text-slate-700 mb-1">No prescriptions yet</p>
           <p className="text-slate-400 text-sm mb-5">Scan your first prescription to get started.</p>
-          <Link to="/scanner" className="btn-primary shadow-brand-sm"><Plus size={15} />Scan prescription</Link>
+          <Link to="/app/scanner" className="btn-primary shadow-brand-sm"><Plus size={15} />Scan prescription</Link>
         </div>
       )}
 

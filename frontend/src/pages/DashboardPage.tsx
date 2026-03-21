@@ -10,12 +10,12 @@ import { useAuthStore } from '../store/auth.store'
 import { clsx } from 'clsx'
 
 const ACTIONS = [
-  { to: '/scanner',       icon: ScanLine,      label: 'Scan Rx',           desc: 'Upload & analyse',      color: 'from-brand-500 to-emerald-400' },
-  { to: '/chat',          icon: MessageSquare, label: 'Ask AI',             desc: 'Medicine questions',    color: 'from-blue-500 to-cyan-400' },
-  { to: '/risk',          icon: AlertTriangle, label: 'Risk Check',         desc: 'Drug interactions',     color: 'from-orange-500 to-amber-400' },
-  { to: '/reminders',     icon: Bell,          label: 'Reminders',          desc: 'Medicine schedule',     color: 'from-purple-500 to-violet-400' },
-  { to: '/prescriptions', icon: FileText,      label: 'Prescriptions',      desc: 'View history',          color: 'from-teal-500 to-cyan-400' },
-  { to: '/locker',        icon: FolderLock,    label: 'Health Locker',      desc: 'Secure documents',      color: 'from-pink-500 to-rose-400' },
+  { to: '/app/scanner',       icon: ScanLine,      label: 'Scan Rx',           desc: 'Upload & analyse',      color: 'from-brand-500 to-emerald-400' },
+  { to: '/app/chat',          icon: MessageSquare, label: 'Ask AI',             desc: 'Medicine questions',    color: 'from-blue-500 to-cyan-400' },
+  { to: '/app/risk',          icon: AlertTriangle, label: 'Risk Check',         desc: 'Drug interactions',     color: 'from-orange-500 to-amber-400' },
+  { to: '/app/reminders',     icon: Bell,          label: 'Reminders',          desc: 'Medicine schedule',     color: 'from-purple-500 to-violet-400' },
+  { to: '/app/prescriptions', icon: FileText,      label: 'Prescriptions',      desc: 'View history',          color: 'from-teal-500 to-cyan-400' },
+  { to: '/app/locker',        icon: FolderLock,    label: 'Health Locker',      desc: 'Secure documents',      color: 'from-pink-500 to-rose-400' },
 ]
 
 function StatCard({ label, value, icon: Icon, sub, accent }: { label: string; value: string | number; icon: any; sub?: string; accent: string }) {
@@ -47,7 +47,7 @@ export default function DashboardPage() {
   const greeting = hour < 5 ? 'Good night' : hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
   const firstName = user?.email?.split('@')[0] ?? 'there'
 
-  const recentRx = rxData?.slice(0, 3) ?? []
+  const recentRx = Array.isArray(rxData) ? rxData.slice(0, 3) : []
 
   return (
     <div className="space-y-7 animate-fade-in">
@@ -61,10 +61,10 @@ export default function DashboardPage() {
           <h1 className="text-white text-2xl font-bold capitalize mb-1">{firstName}</h1>
           <p className="text-brand-100 text-sm">Here's your health overview for today.</p>
           <div className="flex flex-wrap gap-2 mt-5">
-            <Link to="/scanner" className="inline-flex items-center gap-2 px-4 py-2 bg-white text-brand-700 text-sm font-semibold rounded-xl hover:bg-brand-50 transition-all shadow-soft active:scale-95">
+            <Link to="/app/scanner" className="inline-flex items-center gap-2 px-4 py-2 bg-white text-brand-700 text-sm font-semibold rounded-xl hover:bg-brand-50 transition-all shadow-soft active:scale-95">
               <ScanLine size={15} />Scan prescription
             </Link>
-            <Link to="/chat" className="inline-flex items-center gap-2 px-4 py-2 bg-white/20 text-white text-sm font-semibold rounded-xl hover:bg-white/30 transition-all active:scale-95">
+            <Link to="/app/chat" className="inline-flex items-center gap-2 px-4 py-2 bg-white/20 text-white text-sm font-semibold rounded-xl hover:bg-white/30 transition-all active:scale-95">
               <MessageSquare size={15} />Ask AI
             </Link>
           </div>
@@ -100,7 +100,7 @@ export default function DashboardPage() {
             <p className="font-semibold text-red-800">{criticalRisk} high-severity interaction{criticalRisk > 1 ? 's' : ''} detected</p>
             <p className="text-red-700 text-xs mt-0.5">Please consult your doctor before continuing these medications.</p>
           </div>
-          <Link to="/risk" className="shrink-0 btn-danger !py-1.5 !text-xs">View →</Link>
+          <Link to="/app/risk" className="shrink-0 btn-danger !py-1.5 !text-xs">View →</Link>
         </div>
       )}
 
@@ -136,7 +136,7 @@ export default function DashboardPage() {
         <div>
           <div className="flex items-center justify-between mb-3">
             <h2 className="section-title flex items-center gap-2"><Calendar size={16} />Recent prescriptions</h2>
-            <Link to="/prescriptions" className="text-xs text-brand-600 font-semibold hover:text-brand-700 flex items-center gap-1">
+            <Link to="/app/prescriptions" className="text-xs text-brand-600 font-semibold hover:text-brand-700 flex items-center gap-1">
               View all <ChevronRight size={13} />
             </Link>
           </div>
