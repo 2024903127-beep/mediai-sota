@@ -196,58 +196,70 @@ router.post('/prescription', uploadMiddleware.single('image'), async (req: AuthR
 
     const riskReport = await analyseRisk(medicineNames, allergies);
 
-    // 6. Save prescription with schema fallbacks
-    const prescription = await savePrescriptionWithFallback({
-      userId,
-      fileId,
-      viewUrl,
-      rawText: ocr.raw_text,
-      summary: aiResult.summary,
-      medicines: enrichedMedicines,
-      doctorName: ocr.doctor_name,
-      prescribedDate: ocr.date,
-      reviewRequired: Array.from(reviewSet),
-      engineBreakdown: ocr.engine_breakdown,
-    });
+    // 6. Persist scan result (best effort; scan should still succeed even if DB save fails)
+    let prescriptionId: string | null = null;
+    let persistenceWarning: string | null = null;
 
-    // 7. Legacy tables: medicines + interactions (non-fatal)
-    if (enrichedMedicines.length > 0) {
-      const medicineRows = enrichedMedicines.map((m) => ({
-        prescription_id: prescription.id,
-        user_id: userId,
-        name: m.name,
-        frequency_raw: m.frequency || null,
-        composition_enc: m.composition ? encrypt(String(m.composition)) : null,
-        risk_score: typeof m.score === 'number' ? Math.max(0, 100 - m.score) : 0,
-      }));
+    try {
+      const prescription = await savePrescriptionWithFallback({
+        userId,
+        fileId,
+        viewUrl,
+        rawText: ocr.raw_text,
+        summary: aiResult.summary,
+        medicines: enrichedMedicines,
+        doctorName: ocr.doctor_name,
+        prescribedDate: ocr.date,
+        reviewRequired: Array.from(reviewSet),
+        engineBreakdown: ocr.engine_breakdown,
+      });
 
-      const { error: medsError } = await supabase.from('medicines').insert(medicineRows);
-      if (medsError) {
-        logger.warn(`Legacy medicines insert skipped (non-fatal): ${medsError.message}`);
+      prescriptionId = prescription.id;
+
+      // 7. Legacy tables: medicines + interactions (non-fatal)
+      if (enrichedMedicines.length > 0) {
+        const medicineRows = enrichedMedicines.map((m) => ({
+          prescription_id: prescription.id,
+          user_id: userId,
+          name: m.name,
+          frequency_raw: m.frequency || null,
+          composition_enc: m.composition ? encrypt(String(m.composition)) : null,
+          risk_score: typeof m.score === 'number' ? Math.max(0, 100 - m.score) : 0,
+        }));
+
+        const { error: medsError } = await supabase.from('medicines').insert(medicineRows);
+        if (medsError) {
+          logger.warn(`Legacy medicines insert skipped (non-fatal): ${medsError.message}`);
+        }
       }
-    }
 
-    if (riskReport.interactions.length > 0 && medicineNames.length >= 2) {
-      const interactionRows = riskReport.interactions.map((ix) => ({
-        user_id: userId,
-        medicine_a_name: ix.medicine_a,
-        medicine_b_name: ix.medicine_b,
-        severity: ix.severity,
-        description: ix.description,
-        source: ix.source,
-        doctor_acknowledged: false,
-      }));
+      if (riskReport.interactions.length > 0 && medicineNames.length >= 2) {
+        const interactionRows = riskReport.interactions.map((ix) => ({
+          user_id: userId,
+          medicine_a_name: ix.medicine_a,
+          medicine_b_name: ix.medicine_b,
+          severity: ix.severity,
+          description: ix.description,
+          source: ix.source,
+          doctor_acknowledged: false,
+        }));
 
-      const { error: interactionError } = await supabase.from('drug_interactions').insert(interactionRows);
-      if (interactionError) {
-        logger.warn(`Legacy drug_interactions insert skipped (non-fatal): ${interactionError.message}`);
+        const { error: interactionError } = await supabase.from('drug_interactions').insert(interactionRows);
+        if (interactionError) {
+          logger.warn(`Legacy drug_interactions insert skipped (non-fatal): ${interactionError.message}`);
+        }
       }
+    } catch (persistErr: unknown) {
+      persistenceWarning = extractErrorMessage(persistErr);
+      logger.warn(`Scan persistence skipped: ${persistenceWarning}`);
     }
 
     sendSuccess(
       res,
       {
-        prescription_id: prescription.id,
+        prescription_id: prescriptionId,
+        saved: !persistenceWarning,
+        persistence_warning: persistenceWarning,
         ocr: {
           medicines: enrichedMedicines,
           doctor_name: ocr.doctor_name,
@@ -260,20 +272,11 @@ router.post('/prescription', uploadMiddleware.single('image'), async (req: AuthR
         risk: riskReport,
         image_url: viewUrl,
       },
-      'Prescription scanned successfully'
+      persistenceWarning ? 'Prescription scanned (not saved to database)' : 'Prescription scanned successfully'
     );
   } catch (err: unknown) {
     const message = extractErrorMessage(err);
     logger.error(`Scan error: ${message}`, err);
-
-    if (message.includes('Failed to extract text from image') || message.includes('OCR engines unavailable')) {
-      return sendError(
-        res,
-        'Unable to read text from the uploaded file. Please upload a clear JPG/PNG image with good lighting.',
-        500,
-        { code: 'OCR_FAIL' }
-      );
-    }
 
     if (message.includes('PDF conversion failed for OCR')) {
       return sendError(
@@ -284,12 +287,12 @@ router.post('/prescription', uploadMiddleware.single('image'), async (req: AuthR
       );
     }
 
-    if (message.includes('Unable to save prescription')) {
+    if (message.includes('Failed to extract text from image') || message.includes('OCR engines unavailable')) {
       return sendError(
         res,
-        `Scan completed but saving failed: ${message}`,
+        'Unable to read text from the uploaded file. Please upload a clear JPG/PNG image with good lighting.',
         500,
-        { code: 'DB_SAVE_FAIL' }
+        { code: 'OCR_FAIL' }
       );
     }
 

@@ -55,6 +55,16 @@ interface MedicineIndexEntry {
   normalized: string;
 }
 
+function getOcrErrorMessage(error: unknown): string {
+  if (typeof error === 'string') return error;
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === 'object' && 'message' in error) {
+    const maybeMessage = (error as { message?: unknown }).message;
+    if (typeof maybeMessage === 'string' && maybeMessage) return maybeMessage;
+  }
+  return 'Unknown OCR error';
+}
+
 const FREQUENCY_PATTERNS = [
   /\b(\d+\s*times?\s*(?:a\s*)?day)\b/i,
   /\b(once|twice|thrice|three times)\s*(?:a\s*)?(?:day|daily)\b/i,
@@ -490,7 +500,15 @@ export async function extractTextFromImage(imageBuffer: Buffer, options: OCRExtr
     const processedBuffer = await preprocessImage(normalizedInput.buffer);
 
     logger.info('Starting OCR ensemble (Tesseract + TrOCR)...');
-    const [tesseractOutput, trocrOutput] = await Promise.all([runTesseract(processedBuffer), runTrOCR(processedBuffer)]);
+    let [tesseractOutput, trocrOutput] = await Promise.all([runTesseract(processedBuffer), runTrOCR(processedBuffer)]);
+
+    if (!tesseractOutput.text.trim() && !trocrOutput.text.trim() && !processedBuffer.equals(normalizedInput.buffer)) {
+      logger.warn('OCR was empty after preprocessing. Retrying with normalized input buffer...');
+      [tesseractOutput, trocrOutput] = await Promise.all([
+        runTesseract(normalizedInput.buffer),
+        runTrOCR(normalizedInput.buffer),
+      ]);
+    }
 
     if (!tesseractOutput.text.trim() && !trocrOutput.text.trim()) {
       throw new Error('OCR engines unavailable or failed to read image');
@@ -518,8 +536,18 @@ export async function extractTextFromImage(imageBuffer: Buffer, options: OCRExtr
       },
     };
   } catch (error) {
+    const message = getOcrErrorMessage(error);
     logger.error('OCR extraction failed', error);
-    throw new Error('Failed to extract text from image');
+
+    if (message.includes('PDF conversion failed for OCR')) {
+      throw new Error('PDF conversion failed for OCR');
+    }
+
+    if (message.includes('OCR engines unavailable')) {
+      throw new Error('OCR engines unavailable or failed to read image');
+    }
+
+    throw new Error(`Failed to extract text from image: ${message}`);
   }
 }
 

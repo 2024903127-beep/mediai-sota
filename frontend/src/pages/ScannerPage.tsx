@@ -105,8 +105,16 @@ export default function ScannerPage() {
       fd.append('image', file)
       fd.append('mode', mode)
       const { data } = await scanApi.scanPrescription(fd)
-      setResult(data.data)
-      toast.success('Scan complete!')
+      const payload = data.data
+      setResult(payload)
+
+      if (payload?.saved === false) {
+        toast.error(payload?.persistence_warning || 'Scan completed but could not be saved to database.')
+      } else if ((payload?.ocr?.medicines?.length || 0) === 0) {
+        toast.error('Scan finished, but no medicines were detected. Try a clearer image.')
+      } else {
+        toast.success('Scan complete!')
+      }
     } catch (err: any) {
       const code = err?.response?.data?.code as string | undefined
       const fallbackMessage = err?.response?.data?.error || 'Scan failed - please try again.'
@@ -114,6 +122,7 @@ export default function ScannerPage() {
         NO_FILE: 'Please select an image or PDF first.',
         OCR_FAIL: 'Could not read text clearly. Try a brighter, sharper image.',
         PDF_PROCESSING_FAIL: 'This PDF could not be processed. Please try JPG/PNG or another PDF.',
+        UNSUPPORTED_FILE_TYPE: 'Unsupported file type. Please upload JPG, PNG, WebP, HEIC, or PDF.',
         DB_SAVE_FAIL: 'Scan worked, but saving failed. Please check backend schema/env setup.',
         SCAN_FAILED: fallbackMessage,
       }
