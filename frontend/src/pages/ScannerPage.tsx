@@ -122,7 +122,7 @@ export default function ScannerPage() {
       })
       toast.success('AI learned from your correction!')
     } catch {
-      logger.error('Feedback failed silently')
+      console.error('Feedback failed silently')
     }
   }
 

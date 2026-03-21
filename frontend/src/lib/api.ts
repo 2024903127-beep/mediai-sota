@@ -39,7 +39,7 @@ export const userApi = {
 }
 
 export const scanApi = {
-  scanPrescription: (formData: FormData) => api.post('/scan/prescription', formData, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 60000 }),
+  scanPrescription: (formData: FormData) => api.post('/scan/prescription', formData, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 180000 }),
   submitFeedback: (d: any) => api.post('/ai/feedback', d),
 }
 

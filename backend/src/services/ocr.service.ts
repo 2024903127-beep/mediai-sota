@@ -320,14 +320,23 @@ async function preprocessImage(imageBuffer: Buffer): Promise<Buffer> {
 }
 
 async function runTesseract(imageBuffer: Buffer): Promise<EngineOutput> {
-  const tessResult = await Tesseract.recognize(imageBuffer, 'eng', { logger: () => {} });
-  const text = tessResult.data.text || '';
-  const confidence = Number(tessResult.data.confidence || 0);
-  return {
-    text,
-    lines: splitLines(text),
-    confidence,
-  };
+  try {
+    const tessResult = await Tesseract.recognize(imageBuffer, 'eng', { logger: () => {} });
+    const text = tessResult.data.text || '';
+    const confidence = Number(tessResult.data.confidence || 0);
+    return {
+      text,
+      lines: splitLines(text),
+      confidence,
+    };
+  } catch (error) {
+    logger.warn('Tesseract failed, continuing with available OCR engines', error);
+    return {
+      text: '',
+      lines: [],
+      confidence: 0,
+    };
+  }
 }
 
 async function runTrOCR(imageBuffer: Buffer): Promise<EngineOutput> {
@@ -425,6 +434,10 @@ export async function extractTextFromImage(imageBuffer: Buffer): Promise<OCRResu
 
     logger.info('Starting OCR ensemble (Tesseract + TrOCR)...');
     const [tesseractOutput, trocrOutput] = await Promise.all([runTesseract(processedBuffer), runTrOCR(processedBuffer)]);
+
+    if (!tesseractOutput.text.trim() && !trocrOutput.text.trim()) {
+      throw new Error('OCR engines unavailable or failed to read image');
+    }
 
     const fusion = fuseEngineOutputs(tesseractOutput, trocrOutput);
     const raw_text = fusion.text;
