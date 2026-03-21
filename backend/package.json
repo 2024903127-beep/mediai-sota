@@ -4,8 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "tsc && npm run copy:data",
     "start": "node dist/index.js",
+    "copy:data": "node scripts/copy-data.js",
     "lint": "eslint src --ext ts",
     "sync:vectors": "npx ts-node --transpile-only scripts/sync_vectors.ts",
     "test:scan-smoke": "tsx scripts/scan_smoke_test.ts",

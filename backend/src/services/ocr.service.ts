@@ -6,7 +6,7 @@ import fs from 'fs';
 import levenshtein from 'fast-levenshtein';
 import medicinesDb from '../data/medicines_db.json';
 
-const OCR_WARMUP_ENABLED = (process.env.OCR_WARMUP_ENABLED || 'true').toLowerCase() !== 'false';
+const OCR_WARMUP_ENABLED = (process.env.OCR_WARMUP_ENABLED || 'false').toLowerCase() === 'true';
 const TROCR_ENABLED = (process.env.OCR_ENABLE_TROCR || 'true').toLowerCase() !== 'false';
 
 export interface OCRResult {
@@ -551,21 +551,34 @@ export async function extractTextFromImage(imageBuffer: Buffer, options: OCRExtr
   }
 }
 
+async function buildWarmupImage(): Promise<Buffer | null> {
+  try {
+    const sharp = await import('sharp').then((m) => m.default || m);
+    const svg = `
+      <svg width="320" height="96" xmlns="http://www.w3.org/2000/svg">
+        <rect width="100%" height="100%" fill="white" />
+        <text x="20" y="62" font-size="42" font-family="Arial, sans-serif" fill="#111111">Rx</text>
+      </svg>
+    `;
+    return await sharp(Buffer.from(svg)).png().toBuffer();
+  } catch (error) {
+    logger.warn('Unable to build OCR warm-up image (non-fatal)', error);
+    return null;
+  }
+}
+
 export async function warmupOCR(): Promise<void> {
   if (!OCR_WARMUP_ENABLED) {
-    logger.info('OCR warm-up skipped (OCR_WARMUP_ENABLED=false).');
+    logger.info('OCR warm-up skipped (OCR_WARMUP_ENABLED is not true).');
     return;
   }
 
   try {
     logger.info('Starting OCR warm-up...');
-
-    const tinyPng = Buffer.from(
-      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/w8AAn8B9m4fNQAAAABJRU5ErkJggg==',
-      'base64'
-    );
-
-    await runTesseract(tinyPng);
+    const warmupImage = await buildWarmupImage();
+    if (warmupImage) {
+      await runTesseract(warmupImage);
+    }
     if (TROCR_ENABLED) {
       await getTrOCR();
     }
