@@ -21,6 +21,7 @@ import lockerRoutes from './routes/locker';
 import hospitalRoutes from './routes/hospital';
 import prescriptionRoutes from './routes/prescriptions';
 import userRoutes from './routes/users';
+import { warmupOCR } from './services/ocr.service';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -102,6 +103,10 @@ app.use(errorHandler);
 app.listen(PORT, () => {
   logger.info(`🚀 MediAI Backend running on port ${PORT}`);
   logger.info(`🌍 Environment: ${process.env.NODE_ENV}`);
+
+  warmupOCR().catch((err) => {
+    logger.warn('OCR warm-up trigger failed (non-fatal)', err);
+  });
 });
 
 export default app;

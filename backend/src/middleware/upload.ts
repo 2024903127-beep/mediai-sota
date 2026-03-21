@@ -8,7 +8,7 @@ const fileFilter = (_req: Express.Request, file: Express.Multer.File, cb: multer
   if (allowed.includes(file.mimetype)) {
     cb(null, true);
   } else {
-    cb(new AppError('Only images (JPEG, PNG, WebP, HEIC) and PDFs are allowed', 400));
+    cb(new AppError('Only images (JPEG, PNG, WebP, HEIC) and PDFs are allowed', 400, 'UNSUPPORTED_FILE_TYPE'));
   }
 };
 

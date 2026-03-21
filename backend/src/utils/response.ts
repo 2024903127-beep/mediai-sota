@@ -4,8 +4,18 @@ export const sendSuccess = <T>(res: Response, data: T, message?: string, status 
   res.status(status).json({ success: true, data, message });
 };
 
-export const sendError = (res: Response, error: string, status = 400) => {
-  res.status(status).json({ success: false, error });
+export interface ErrorMeta {
+  code?: string;
+  details?: unknown;
+}
+
+export const sendError = (res: Response, error: string, status = 400, meta?: ErrorMeta) => {
+  const payload: Record<string, unknown> = { success: false, error };
+  if (meta?.code) payload.code = meta.code;
+  if (meta && Object.prototype.hasOwnProperty.call(meta, 'details')) {
+    payload.details = meta.details;
+  }
+  res.status(status).json(payload);
 };
 
 export const sendPaginated = <T>(

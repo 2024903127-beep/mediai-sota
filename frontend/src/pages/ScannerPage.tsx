@@ -108,7 +108,16 @@ export default function ScannerPage() {
       setResult(data.data)
       toast.success('Scan complete!')
     } catch (err: any) {
-      toast.error(err.response?.data?.error || 'Scan failed — try a clearer image.')
+      const code = err?.response?.data?.code as string | undefined
+      const fallbackMessage = err?.response?.data?.error || 'Scan failed - please try again.'
+      const codeMessageMap: Record<string, string> = {
+        NO_FILE: 'Please select an image or PDF first.',
+        OCR_FAIL: 'Could not read text clearly. Try a brighter, sharper image.',
+        PDF_PROCESSING_FAIL: 'This PDF could not be processed. Please try JPG/PNG or another PDF.',
+        DB_SAVE_FAIL: 'Scan worked, but saving failed. Please check backend schema/env setup.',
+        SCAN_FAILED: fallbackMessage,
+      }
+      toast.error(code ? (codeMessageMap[code] || fallbackMessage) : fallbackMessage)
     } finally { setLoading(false) }
   }
 

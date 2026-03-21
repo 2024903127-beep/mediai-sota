@@ -32,6 +32,7 @@ Thumbs.db
 # Google credentials (NEVER commit)
 **/google-credentials.json
 **/service-account*.json
+eng.traineddata
 
 # Misc
 coverage/

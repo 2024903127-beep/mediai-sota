@@ -112,14 +112,14 @@ async function savePrescriptionWithFallback(args: SavePrescriptionArgs): Promise
 
 // POST /api/scan/prescription
 router.post('/prescription', uploadMiddleware.single('image'), async (req: AuthRequest, res: Response) => {
-  if (!req.file) return sendError(res, 'No image file provided');
+  if (!req.file) return sendError(res, 'No image file provided', 400, { code: 'NO_FILE' });
 
   const userId = req.user!.id;
   const mode = (req.body.mode as 'simple' | 'technical') || 'simple';
 
   try {
     // 1. OCR extraction
-    const ocr = await extractTextFromImage(req.file.buffer);
+    const ocr = await extractTextFromImage(req.file.buffer, { mimeType: req.file.mimetype });
 
     // 2. Upload to Supabase Storage (non-fatal)
     let fileId = '';
@@ -270,14 +270,34 @@ router.post('/prescription', uploadMiddleware.single('image'), async (req: AuthR
       return sendError(
         res,
         'Unable to read text from the uploaded file. Please upload a clear JPG/PNG image with good lighting.',
-        500
+        500,
+        { code: 'OCR_FAIL' }
+      );
+    }
+
+    if (message.includes('PDF conversion failed for OCR')) {
+      return sendError(
+        res,
+        'The uploaded PDF could not be processed. Please upload a JPG/PNG image or a flatter PDF scan.',
+        500,
+        { code: 'PDF_PROCESSING_FAIL' }
+      );
+    }
+
+    if (message.includes('Unable to save prescription')) {
+      return sendError(
+        res,
+        `Scan completed but saving failed: ${message}`,
+        500,
+        { code: 'DB_SAVE_FAIL' }
       );
     }
 
     return sendError(
       res,
       `Scan failed: ${message}`,
-      500
+      500,
+      { code: 'SCAN_FAILED' }
     );
   }
 });

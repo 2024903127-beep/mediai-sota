@@ -6,6 +6,9 @@ import fs from 'fs';
 import levenshtein from 'fast-levenshtein';
 import medicinesDb from '../data/medicines_db.json';
 
+const OCR_WARMUP_ENABLED = (process.env.OCR_WARMUP_ENABLED || 'true').toLowerCase() !== 'false';
+const TROCR_ENABLED = (process.env.OCR_ENABLE_TROCR || 'true').toLowerCase() !== 'false';
+
 export interface OCRResult {
   raw_text: string;
   medicines: ExtractedMedicine[];
@@ -17,7 +20,12 @@ export interface OCRResult {
     tesseract_confidence: number;
     trocr_used: boolean;
     consensus_score: number;
+    pdf_converted?: boolean;
   };
+}
+
+export interface OCRExtractOptions {
+  mimeType?: string;
 }
 
 export interface ExtractedMedicine {
@@ -124,11 +132,42 @@ const tokenLookupCache = new Map<string, number>();
 let trocrPipeline: any = null;
 
 async function getTrOCR() {
+  if (!TROCR_ENABLED) return null;
   if (!trocrPipeline) {
     logger.info('Initializing TrOCR transformer model...');
     trocrPipeline = await pipeline('image-to-text', 'Xenova/trocr-small-printed');
   }
   return trocrPipeline;
+}
+
+function isPdfMimeType(mimeType?: string): boolean {
+  return (mimeType || '').toLowerCase().includes('pdf');
+}
+
+function isPdfBuffer(buffer: Buffer): boolean {
+  if (!buffer || buffer.length < 4) return false;
+  return buffer[0] === 0x25 && buffer[1] === 0x50 && buffer[2] === 0x44 && buffer[3] === 0x46; // %PDF
+}
+
+async function convertPdfToImageBuffer(pdfBuffer: Buffer): Promise<Buffer> {
+  try {
+    const sharp = await import('sharp').then((m) => m.default || m);
+    return await sharp(pdfBuffer, { density: 240, page: 0 })
+      .flatten({ background: '#ffffff' })
+      .png()
+      .toBuffer();
+  } catch (error) {
+    logger.error('PDF conversion failed for OCR', error);
+    throw new Error('PDF conversion failed for OCR');
+  }
+}
+
+async function normalizeInputBuffer(imageBuffer: Buffer, options: OCRExtractOptions): Promise<{ buffer: Buffer; pdfConverted: boolean }> {
+  const pdfInput = isPdfMimeType(options.mimeType) || isPdfBuffer(imageBuffer);
+  if (!pdfInput) return { buffer: imageBuffer, pdfConverted: false };
+
+  const converted = await convertPdfToImageBuffer(imageBuffer);
+  return { buffer: converted, pdfConverted: true };
 }
 
 function normalizeCompact(text: string): string {
@@ -340,9 +379,24 @@ async function runTesseract(imageBuffer: Buffer): Promise<EngineOutput> {
 }
 
 async function runTrOCR(imageBuffer: Buffer): Promise<EngineOutput> {
+  if (!TROCR_ENABLED) {
+    return {
+      text: '',
+      lines: [],
+      confidence: 0,
+    };
+  }
+
   let tmpPath = '';
   try {
     const model = await getTrOCR();
+    if (!model) {
+      return {
+        text: '',
+        lines: [],
+        confidence: 0,
+      };
+    }
     tmpPath = path.join(__dirname, `../../tmp_ocr_${Date.now()}_${Math.random().toString(16).slice(2)}.png`);
     fs.writeFileSync(tmpPath, imageBuffer);
     const output = await model(tmpPath);
@@ -427,10 +481,12 @@ function extractDate(text: string): string | undefined {
   return match?.[0];
 }
 
-export async function extractTextFromImage(imageBuffer: Buffer): Promise<OCRResult> {
+export async function extractTextFromImage(imageBuffer: Buffer, options: OCRExtractOptions = {}): Promise<OCRResult> {
   try {
+    const normalizedInput = await normalizeInputBuffer(imageBuffer, options);
+
     logger.info('Preprocessing image for OCR...');
-    const processedBuffer = await preprocessImage(imageBuffer);
+    const processedBuffer = await preprocessImage(normalizedInput.buffer);
 
     logger.info('Starting OCR ensemble (Tesseract + TrOCR)...');
     const [tesseractOutput, trocrOutput] = await Promise.all([runTesseract(processedBuffer), runTrOCR(processedBuffer)]);
@@ -457,10 +513,36 @@ export async function extractTextFromImage(imageBuffer: Buffer): Promise<OCRResu
         tesseract_confidence: tesseractOutput.confidence,
         trocr_used: Boolean(trocrOutput.text.trim()),
         consensus_score: Number(fusion.consensusScore.toFixed(2)),
+        pdf_converted: normalizedInput.pdfConverted,
       },
     };
   } catch (error) {
     logger.error('OCR extraction failed', error);
     throw new Error('Failed to extract text from image');
+  }
+}
+
+export async function warmupOCR(): Promise<void> {
+  if (!OCR_WARMUP_ENABLED) {
+    logger.info('OCR warm-up skipped (OCR_WARMUP_ENABLED=false).');
+    return;
+  }
+
+  try {
+    logger.info('Starting OCR warm-up...');
+
+    const tinyPng = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/w8AAn8B9m4fNQAAAABJRU5ErkJggg==',
+      'base64'
+    );
+
+    await runTesseract(tinyPng);
+    if (TROCR_ENABLED) {
+      await getTrOCR();
+    }
+
+    logger.info('OCR warm-up complete.');
+  } catch (error) {
+    logger.warn('OCR warm-up failed (non-fatal)', error);
   }
 }
