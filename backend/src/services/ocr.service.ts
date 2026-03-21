@@ -187,7 +187,8 @@ function looksLikeNoiseToken(token: string): boolean {
   if (!clean) return true;
   if (NOISE_WORDS.includes(clean)) return true;
   if (/^[0-9]{4,}$/.test(clean)) return true;
-  if (/^[A-Z0-9]{8,}$/.test(clean)) return true;
+  if (/^(?=.*[A-Z])(?=.*\d)[A-Z0-9]{8,}$/.test(clean)) return true;
+  if (/^[A-Z]{10,}$/.test(clean) && !/[AEIOU]/.test(clean)) return true;
   return false;
 }
 

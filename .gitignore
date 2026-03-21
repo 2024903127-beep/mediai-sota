@@ -33,6 +33,13 @@ Thumbs.db
 **/google-credentials.json
 **/service-account*.json
 eng.traineddata
+backend/tests/fixtures/prescriptions/*.png
+backend/tests/fixtures/prescriptions/*.jpg
+backend/tests/fixtures/prescriptions/*.jpeg
+backend/tests/fixtures/prescriptions/*.webp
+backend/tests/fixtures/prescriptions/*.pdf
+backend/tests/fixtures/prescriptions/manifest.json
+backend/reports/*.json
 
 # Misc
 coverage/

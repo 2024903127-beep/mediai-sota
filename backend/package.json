@@ -8,7 +8,8 @@
     "start": "node dist/index.js",
     "lint": "eslint src --ext ts",
     "sync:vectors": "npx ts-node --transpile-only scripts/sync_vectors.ts",
-    "test:scan-smoke": "tsx scripts/scan_smoke_test.ts"
+    "test:scan-smoke": "tsx scripts/scan_smoke_test.ts",
+    "test:scan-regression": "tsx scripts/scan_regression_test.ts"
   },
   "dependencies": {
     "@google-cloud/vision": "^4.0.2",
